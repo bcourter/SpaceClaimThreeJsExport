@@ -17,303 +17,327 @@ using System.IO;
 using Newtonsoft.Json;
 
 namespace SpaceClaim.AddIn.ThreeJsExport {
-    class ExportThreeJsToolCapsule : CommandCapsule {
-        public ExportThreeJsToolCapsule(string commandName)
-            : base(commandName, "Export") {
-        }
+	class ExportThreeJsToolCapsule : CommandCapsule {
+		public ExportThreeJsToolCapsule(string commandName)
+			: base(commandName, "Export") {
+		}
 
-        protected override void OnInitialize(Command command) {
-        }
+		protected override void OnInitialize(Command command) {
+		}
 
-        protected override void OnUpdate(Command command) {
-            Window window = Window.ActiveWindow;
-            command.IsEnabled = window != null &&
-                                window.Scene is Part;
-            command.IsChecked = false;
-        }
+		protected override void OnUpdate(Command command) {
+			Window window = Window.ActiveWindow;
+			command.IsEnabled = window != null &&
+								window.Scene is Part;
+			command.IsChecked = false;
+		}
 
-        public static IEnumerable<IPart> WalkParts(Part part) { // Copied from SpaceClaim.Api.V10.Examples class ShowBomCapsule
-            Debug.Assert(part != null);
+		public static IEnumerable<IPart> WalkParts(Part part) { // Copied from SpaceClaim.Api.V10.Examples class ShowBomCapsule
+			Debug.Assert(part != null);
 
-            // GetDescendants goes not include the object itself
-            yield return part;
+			// GetDescendants goes not include the object itself
+			yield return part;
 
-            foreach (IPart descendant in part.GetDescendants<IPart>())
-                yield return descendant;
-        }
+			foreach (IPart descendant in part.GetDescendants<IPart>())
+				yield return descendant;
+		}
 
-        protected override void OnExecute(Command command, ExecutionContext context, Rectangle buttonRect) {
-            var window = Window.ActiveWindow;
-            var document = window.Document;
+		protected override void OnExecute(Command command, ExecutionContext context, Rectangle buttonRect) {
+			var window = Window.ActiveWindow;
+			var document = window.Document;
 
-            var surfaceDeviationCommand = Command.GetCommand("SurfaceDeviation");
-            double surfaceDeviation;
-            if (!double.TryParse(surfaceDeviationCommand.Text, out surfaceDeviation))
-                surfaceDeviation = (new TessellationOptions()).SurfaceDeviation;
+			var surfaceDeviationCommand = Command.GetCommand("SurfaceDeviation");
+			double surfaceDeviation;
+			if (!double.TryParse(surfaceDeviationCommand.Text, out surfaceDeviation))
+				surfaceDeviation = (new TessellationOptions()).SurfaceDeviation;
 
-            var angleDeviationCommand = Command.GetCommand("AngleDeviation");
-            double angleDeviation;
-            if (!double.TryParse(angleDeviationCommand.Text, out angleDeviation))
-                angleDeviation = (new TessellationOptions()).AngleDeviation;
+			var angleDeviationCommand = Command.GetCommand("AngleDeviation");
+			double angleDeviation;
+			if (!double.TryParse(angleDeviationCommand.Text, out angleDeviation))
+				angleDeviation = (new TessellationOptions()).AngleDeviation;
 
-            Part mainPart = (Part)Window.ActiveWindow.Scene;
+			Part mainPart = (Part)Window.ActiveWindow.Scene;
 
-            var tessellations = new Dictionary<Body, PartTessellation>();
+			var tessellations = new Dictionary<Body, PartTessellation>();
 
-            var totalTessellation = new PartTessellation();
-            foreach (var iPart in WalkParts(mainPart)) {
-                var transform = iPart.TransformToMaster.Inverse;
+			var totalTessellation = new PartTessellation();
+			foreach (var iPart in WalkParts(mainPart)) {
+				var transform = iPart.TransformToMaster.Inverse;
 
-                foreach (var body in iPart.Bodies) {
-                    if (!body.GetVisibility(null) ?? !body.Master.Layer.IsVisible(null))
-                        continue;
+				foreach (var body in iPart.Bodies) {
+					if (!body.GetVisibility(null) ?? !body.Master.Layer.IsVisible(null))
+						continue;
 
-                    var masterBody = body.Master.Shape;
+					var masterBody = body.Master.Shape;
 
-                    PartTessellation tessellation;
-                    if (!tessellations.TryGetValue(masterBody, out tessellation)) {
-                        Func<Face, Color> getColor = f => body.Master.GetDesignFace(f).GetColor(null) ??
-                                            body.Master.GetColor(null) ??
-                                            body.Master.Layer.GetColor(null);
-                        tessellation = GetBodyTessellation(masterBody, getColor, surfaceDeviation, angleDeviation);
-                        tessellations[masterBody] = tessellation;
-                    }
+					PartTessellation tessellation;
+					if (!tessellations.TryGetValue(masterBody, out tessellation)) {
+						Func<Face, Color> getColor = f => body.Master.GetDesignFace(f).GetColor(null) ??
+											body.Master.GetColor(null) ??
+											body.Master.Layer.GetColor(null);
+						tessellation = GetBodyTessellation(masterBody, getColor, surfaceDeviation, angleDeviation);
+						tessellations[masterBody] = tessellation;
+					}
 
-                    totalTessellation.Add(tessellation.GetTransformed(transform));
-                }
-            }
+					totalTessellation.Add(tessellation.GetTransformed(transform));
+				}
 
-            var result = totalTessellation.ToJson();
+				PartTessellation curveTessellation = GetCurvesTessellation(iPart.Curves
+			//		.Where(c => !c.GetVisibility(null) ?? !c.Master.Layer.IsVisible(null))
+					.Select(c => c.Master.Shape)
+					.ToList()
+				);
 
-            var d = new SaveFileDialog();
-            d.FileName = document.Path;
-            d.ShowDialog();
+			//	tessellations[masterBody] = curveTessellation;
+				totalTessellation.Add(curveTessellation.GetTransformed(transform));
+			}
 
-            File.WriteAllText(d.FileName, result);
-        }
+			var result = totalTessellation.ToJson();
 
-        class PartTessellation {
-            public List<BodyTessellation> Lines = new List<BodyTessellation>();
-            public List<BodyTessellation> Meshes = new List<BodyTessellation>();
+			var d = new SaveFileDialog();
+			d.FileName = document.Path;
+			d.ShowDialog();
 
-            public PartTessellation GetTransformed(Matrix transform) {
-                return new PartTessellation {
-                    Lines = new List<BodyTessellation>(this.Lines.Select(l => l.GetTransformed(transform))),
-                    Meshes = new List<BodyTessellation>(this.Meshes.Select(l => l.GetTransformed(transform)))
-                };
-            }
+			File.WriteAllText(d.FileName, result);
+		}
 
-            public void Add(PartTessellation other) {
-                Lines.AddRange(other.Lines);
-                Meshes.AddRange(other.Meshes);
-            }
+		class PartTessellation {
+			public List<BodyTessellation> Lines = new List<BodyTessellation>();
+			public List<BodyTessellation> Meshes = new List<BodyTessellation>();
 
-            public string ToJson() {
-                StringBuilder sb = new StringBuilder();
-                StringWriter sw = new StringWriter(sb);
+			public PartTessellation GetTransformed(Matrix transform) {
+				return new PartTessellation {
+					Lines = new List<BodyTessellation>(this.Lines.Select(l => l.GetTransformed(transform))),
+					Meshes = new List<BodyTessellation>(this.Meshes.Select(l => l.GetTransformed(transform)))
+				};
+			}
 
-                using (JsonWriter writer = new JsonTextWriter(sw)) {
-                    writer.Formatting = Formatting.Indented;
+			public void Add(PartTessellation other) {
+				Lines.AddRange(other.Lines);
+				Meshes.AddRange(other.Meshes);
+			}
 
-                    writer.WriteStartObject();
+			public string ToJson() {
+				StringBuilder sb = new StringBuilder();
+				StringWriter sw = new StringWriter(sb);
 
-                    if (Lines.Count > 0) {
-                        writer.WritePropertyName("lines");
-                        writer.WriteStartArray();
+				using (JsonWriter writer = new JsonTextWriter(sw)) {
+					writer.Formatting = Formatting.Indented;
 
-                        foreach (var line in Lines) {
-                            writer.WriteRawValue(line.ToJson());
-                        }
+					writer.WriteStartObject();
 
-                        writer.WriteEndArray();
-                    }
+					if (Lines.Count > 0) {
+						writer.WritePropertyName("lines");
+						writer.WriteStartArray();
 
-                    if (Meshes.Count > 0) {
-                        writer.WritePropertyName("meshes");
-                        writer.WriteStartArray();
+						foreach (var line in Lines) {
+							writer.WriteRawValue(line.ToJson());
+						}
 
-                        foreach (var line in Meshes) {
-                            writer.WriteRawValue(line.ToJson());
-                        }
+						writer.WriteEndArray();
+					}
 
-                        writer.WriteEndArray();
-                    }
+					if (Meshes.Count > 0) {
+						writer.WritePropertyName("meshes");
+						writer.WriteStartArray();
 
-                    writer.WriteEndObject();
-                }
+						foreach (var line in Meshes) {
+							writer.WriteRawValue(line.ToJson());
+						}
 
-                return sb.ToString();
-            }
-        }
+						writer.WriteEndArray();
+					}
 
-        class BodyTessellation {
-            public List<Point> VertexPositions = new List<Point>();
-            public List<Direction> VertexNormals = new List<Direction>();
-            public List<Color> FaceColors = new List<Color>();
-            public List<FaceStruct> Faces = new List<FaceStruct>();
+					writer.WriteEndObject();
+				}
 
-            public BodyTessellation GetTransformed(Matrix transform) {
-                return new BodyTessellation {
-                    VertexPositions = new List<Point>(this.VertexPositions.Select(p => transform * p)),
-                    VertexNormals = new List<Direction>(this.VertexNormals.Select(n => transform * n)),
-                    FaceColors = this.FaceColors,
-                    Faces = this.Faces
-                };
-            }
+				return sb.ToString();
+			}
+		}
 
-            public void Add(BodyTessellation other) {
-                int vertexOffset = VertexPositions.Count;
-                int faceColorOffset = FaceColors.Count;
+		class BodyTessellation {
+			public List<Point> VertexPositions = new List<Point>();
+			public List<Direction> VertexNormals = new List<Direction>();
+			public List<Color> FaceColors = new List<Color>();
+			public List<FaceStruct> Faces = new List<FaceStruct>();
 
-                VertexPositions.AddRange(other.VertexPositions);
-                VertexNormals.AddRange(other.VertexNormals);
-                FaceColors.AddRange(other.FaceColors);
-                Faces.AddRange(other.Faces.Select(f => new FaceStruct {
-                    Vertex1 = f.Vertex1 + vertexOffset,
-                    Vertex2 = f.Vertex2 + vertexOffset,
-                    Vertex3 = f.Vertex3 + vertexOffset,
-                    Color = f.Color + faceColorOffset
-                }));
-            }
+			public BodyTessellation GetTransformed(Matrix transform) {
+				return new BodyTessellation {
+					VertexPositions = new List<Point>(this.VertexPositions.Select(p => transform * p)),
+					VertexNormals = new List<Direction>(this.VertexNormals.Select(n => transform * n)),
+					FaceColors = this.FaceColors,
+					Faces = this.Faces
+				};
+			}
 
-            public string ToJson() {
-                StringBuilder sb = new StringBuilder();
-                StringWriter sw = new StringWriter(sb);
+			public void Add(BodyTessellation other) {
+				int vertexOffset = VertexPositions.Count;
+				int faceColorOffset = FaceColors.Count;
 
-                using (JsonWriter writer = new JsonTextWriter(sw)) {
-                    writer.Formatting = Formatting.Indented;
+				VertexPositions.AddRange(other.VertexPositions);
+				VertexNormals.AddRange(other.VertexNormals);
+				FaceColors.AddRange(other.FaceColors);
+				Faces.AddRange(other.Faces.Select(f => new FaceStruct {
+					Vertex1 = f.Vertex1 + vertexOffset,
+					Vertex2 = f.Vertex2 + vertexOffset,
+					Vertex3 = f.Vertex3 + vertexOffset,
+					Color = f.Color + faceColorOffset
+				}));
+			}
 
-                    writer.WriteStartObject();
+			public string ToJson() {
+				StringBuilder sb = new StringBuilder();
+				StringWriter sw = new StringWriter(sb);
 
-                    writer.WritePropertyName("metadata");
-                    writer.WriteStartObject();
-                    writer.WritePropertyName("formatVersion");
-                    writer.WriteValue(3);
-                    writer.WriteEndObject();
+				using (JsonWriter writer = new JsonTextWriter(sw)) {
+					writer.Formatting = Formatting.Indented;
 
-                    writer.WritePropertyName("vertices");
-                    writer.WriteStartArray();
-                    foreach (var vertex in VertexPositions)
-                        writer.WriteRawValue(string.Format("{0:0.0###############},{1:0.0###############},{2:0.0###############}", vertex.X, vertex.Y, vertex.Z));
-                    writer.WriteEndArray();
+					writer.WriteStartObject();
 
-                    writer.WritePropertyName("normals");
-                    writer.WriteStartArray();
-                    foreach (var normal in VertexNormals)
-                        writer.WriteRawValue(string.Format("{0:0.0###############},{1:0.0###############},{2:0.0###############}", normal.X, normal.Y, normal.Z));
-                    writer.WriteEndArray();
+					writer.WritePropertyName("metadata");
+					writer.WriteStartObject();
+					writer.WritePropertyName("formatVersion");
+					writer.WriteValue(3);
+					writer.WriteEndObject();
 
-                    writer.WritePropertyName("colors");
-                    writer.WriteStartArray();
-                    foreach (var color in FaceColors)
-                        writer.WriteValue(((long)color.R << 16) | ((long)color.G << 8) | color.B);
-                    writer.WriteEndArray();
+					writer.WritePropertyName("vertices");
+					writer.WriteStartArray();
+					foreach (var vertex in VertexPositions)
+						writer.WriteRawValue(string.Format("{0:0.0###############},{1:0.0###############},{2:0.0###############}", vertex.X, vertex.Y, vertex.Z));
+					writer.WriteEndArray();
 
-                    writer.WritePropertyName("faces");
-                    writer.WriteStartArray();
-                    foreach (var face in Faces)
-                        writer.WriteRawValue(face.ToString());
-                    writer.WriteEndArray();
+					writer.WritePropertyName("normals");
+					writer.WriteStartArray();
+					foreach (var normal in VertexNormals)
+						writer.WriteRawValue(string.Format("{0:0.0###############},{1:0.0###############},{2:0.0###############}", normal.X, normal.Y, normal.Z));
+					writer.WriteEndArray();
 
-                    writer.WriteEndObject();
-                }
+					writer.WritePropertyName("colors");
+					writer.WriteStartArray();
+					foreach (var color in FaceColors)
+						writer.WriteValue(((long)color.R << 16) | ((long)color.G << 8) | color.B);
+					writer.WriteEndArray();
 
-                return sb.ToString();
-            }
-        }
+					writer.WritePropertyName("faces");
+					writer.WriteStartArray();
+					foreach (var face in Faces)
+						writer.WriteRawValue(face.ToString());
+					writer.WriteEndArray();
 
-        class FaceStruct {
-            public int Vertex1;
-            public int Vertex2;
-            public int Vertex3;
-            public int Color;
+					writer.WriteEndObject();
+				}
 
-            [Flags]
-            enum FaceType {
-                Triangle = 0,
-                Quad = 1,
-                Material = 2,
-                UV = 4,
-                VertexUV = 8,
-                Normal = 16,
-                VertexNormal = 32,
-                Color = 64,
-                VertexColor = 128
-            };
+				return sb.ToString();
+			}
+		}
 
-            public override string ToString() {
-                var faceType = FaceType.Triangle | FaceType.VertexNormal | FaceType.Color;
+		class FaceStruct {
+			public int Vertex1;
+			public int Vertex2;
+			public int Vertex3;
+			public int Color;
 
-                return string.Format("{0}, {1},{2},{3}, {4},{5},{6}, {7}", (int)faceType, Vertex1, Vertex2, Vertex3, Vertex1, Vertex2, Vertex3, Color);
-            }
-        }
+			[Flags]
+			enum FaceType {
+				Triangle = 0,
+				Quad = 1,
+				Material = 2,
+				UV = 4,
+				VertexUV = 8,
+				Normal = 16,
+				VertexNormal = 32,
+				Color = 64,
+				VertexColor = 128
+			};
 
-        static PartTessellation GetBodyTessellation(Body body, Func<Face, Color> faceColor, double surfaceDeviation, double angleDeviation) {
-            var tessellationOptions = new TessellationOptions(surfaceDeviation, angleDeviation);
-            var tessellation = body.GetTessellation(null, tessellationOptions);
+			public override string ToString() {
+				var faceType = FaceType.Triangle | FaceType.VertexNormal | FaceType.Color;
 
-            var vertices = new Dictionary<PositionNormalTextured, int>();
-            var vertexList = new List<Point>();
-            var normalList = new List<Direction>();
+				return string.Format("{0}, {1},{2},{3}, {4},{5},{6}, {7}", (int)faceType, Vertex1, Vertex2, Vertex3, Vertex1, Vertex2, Vertex3, Color);
+			}
+		}
 
-            var colors = new Dictionary<Color, int>();
-            var colorList = new List<Color>();
+		static PartTessellation GetBodyTessellation(Body body, Func<Face, Color> faceColor, double surfaceDeviation, double angleDeviation) {
+			var tessellationOptions = new TessellationOptions(surfaceDeviation, angleDeviation);
+			var tessellation = body.GetTessellation(null, tessellationOptions);
 
-            var faces = new List<FaceStruct>();
-            foreach (var pair in tessellation) {
-                var color = faceColor(pair.Key);
+			var vertices = new Dictionary<PositionNormalTextured, int>();
+			var vertexList = new List<Point>();
+			var normalList = new List<Direction>();
 
-                int colorIndex;
-                if (!colors.TryGetValue(color, out colorIndex)) {
-                    colorList.Add(color);
-                    colorIndex = colorList.Count - 1;
-                    colors[color] = colorIndex;
-                }
+			var colors = new Dictionary<Color, int>();
+			var colorList = new List<Color>();
 
-                var vertexIndices = new Dictionary<int, int>();
+			var faces = new List<FaceStruct>();
+			foreach (var pair in tessellation) {
+				var color = faceColor(pair.Key);
 
-                var i = 0;
-                foreach (var vertex in pair.Value.Vertices) {
-                    int index;
-                    if (!vertices.TryGetValue(vertex, out index)) {
-                        vertexList.Add(vertex.Position);
-                        normalList.Add(vertex.Normal);
-                        index = vertexList.Count - 1;
-                        vertices[vertex] = index;
-                    }
+				int colorIndex;
+				if (!colors.TryGetValue(color, out colorIndex)) {
+					colorList.Add(color);
+					colorIndex = colorList.Count - 1;
+					colors[color] = colorIndex;
+				}
 
-                    vertexIndices[i] = index;
-                    i++;
-                }
+				var vertexIndices = new Dictionary<int, int>();
 
-                foreach (var facet in pair.Value.Facets) {
-                    faces.Add(new FaceStruct {
-                        Vertex1 = vertexIndices[facet.Vertex0],
-                        Vertex2 = vertexIndices[facet.Vertex1],
-                        Vertex3 = vertexIndices[facet.Vertex2],
-                        Color = colorIndex
-                    });
-                }
-            }
+				var i = 0;
+				foreach (var vertex in pair.Value.Vertices) {
+					int index;
+					if (!vertices.TryGetValue(vertex, out index)) {
+						vertexList.Add(vertex.Position);
+						normalList.Add(vertex.Normal);
+						index = vertexList.Count - 1;
+						vertices[vertex] = index;
+					}
 
-            var faceTessellation = new BodyTessellation {
-                VertexPositions = vertexList,
-                VertexNormals = normalList,
-                FaceColors = colorList,
-                Faces = faces
-            };
+					vertexIndices[i] = index;
+					i++;
+				}
 
-            List<BodyTessellation> edges = new List<BodyTessellation>();
-            foreach (var edge in body.Edges) {
-                edges.Add(new BodyTessellation {
-                    VertexPositions = new List<Point>(edge.GetPolyline())
-                });
-            }
+				foreach (var facet in pair.Value.Facets) {
+					faces.Add(new FaceStruct {
+						Vertex1 = vertexIndices[facet.Vertex0],
+						Vertex2 = vertexIndices[facet.Vertex1],
+						Vertex3 = vertexIndices[facet.Vertex2],
+						Color = colorIndex
+					});
+				}
+			}
 
-            return new PartTessellation {
-                Lines = edges,
-                Meshes = { faceTessellation }
-            };
-        }
-    }
+			var faceTessellation = new BodyTessellation {
+				VertexPositions = vertexList,
+				VertexNormals = normalList,
+				FaceColors = colorList,
+				Faces = faces
+			};
+
+			List<BodyTessellation> edges = new List<BodyTessellation>();
+			foreach (var edge in body.Edges) {
+				edges.Add(new BodyTessellation {
+					VertexPositions = new List<Point>(edge.GetPolyline())
+				});
+			}
+
+			return new PartTessellation {
+				Lines = edges,
+				Meshes = { faceTessellation }
+			};
+		}
+
+
+		static PartTessellation GetCurvesTessellation(IList<ITrimmedCurve> curves) {
+			List<BodyTessellation> edges = new List<BodyTessellation>();
+			foreach (var curve in curves) {
+				edges.Add(new BodyTessellation {
+					VertexPositions = new List<Point>(curve.GetPolyline())
+				});
+			}
+
+			return new PartTessellation {
+				Lines = edges,
+				Meshes = { }
+			};
+		}
+	}
 }
