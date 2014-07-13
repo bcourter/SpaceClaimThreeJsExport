@@ -82,10 +82,16 @@ namespace SpaceClaim.AddIn.ThreeJsExport {
 					totalTessellation.Add(tessellation.GetTransformed(transform));
 				}
 
-				PartTessellation curveTessellation = GetCurvesTessellation(iPart.Curves
-			//		.Where(c => !c.GetVisibility(null) ?? !c.Master.Layer.IsVisible(null))
-					.Select(c => c.Master.Shape)
-					.ToList()
+				PartTessellation curveTessellation = GetCurvesTessellation(
+					iPart.Curves
+				//		.Where(c => !c.GetVisibility(null) ?? !c.Master.Layer.IsVisible(null))
+						.Select(c => c.Master.Shape)
+						.ToList(),
+					iPart.Curves
+					//		.Where(c => !c.GetVisibility(null) ?? !c.Master.Layer.IsVisible(null))
+						.Select(c => (c.Master.GetColor(null) ?? c.Master.Layer.GetColor(null)))
+						.ToList(),
+					true
 				);
 
 			//	tessellations[masterBody] = curveTessellation;
@@ -160,13 +166,15 @@ namespace SpaceClaim.AddIn.ThreeJsExport {
 			public List<Direction> VertexNormals = new List<Direction>();
 			public List<Color> FaceColors = new List<Color>();
 			public List<FaceStruct> Faces = new List<FaceStruct>();
+			public bool IsCurve;
 
 			public BodyTessellation GetTransformed(Matrix transform) {
 				return new BodyTessellation {
 					VertexPositions = new List<Point>(this.VertexPositions.Select(p => transform * p)),
 					VertexNormals = new List<Direction>(this.VertexNormals.Select(n => transform * n)),
 					FaceColors = this.FaceColors,
-					Faces = this.Faces
+					Faces = this.Faces,
+					IsCurve = this.IsCurve
 				};
 			}
 
@@ -197,7 +205,7 @@ namespace SpaceClaim.AddIn.ThreeJsExport {
 					writer.WritePropertyName("metadata");
 					writer.WriteStartObject();
 					writer.WritePropertyName("formatVersion");
-					writer.WriteValue(3);
+					writer.WriteValue(IsCurve ? -3 : 3);
 					writer.WriteEndObject();
 
 					writer.WritePropertyName("vertices");
@@ -258,6 +266,76 @@ namespace SpaceClaim.AddIn.ThreeJsExport {
 		}
 
 		static PartTessellation GetBodyTessellation(Body body, Func<Face, Color> faceColor, double surfaceDeviation, double angleDeviation) {
+			var vertices = new Dictionary<PositionNormalTextured, int>();
+			var vertexList = new List<Point>();
+			var normalList = new List<Direction>();
+
+			var colors = new Dictionary<Color, int>();
+			var colorList = new List<Color>();
+
+			var faces = new List<FaceStruct>();
+			foreach (var bodyFace in body.Faces) {
+				var color = faceColor(bodyFace);
+
+				int colorIndex;
+				if (!colors.TryGetValue(color, out colorIndex)) {
+					colorList.Add(color);
+					colorIndex = colorList.Count - 1;
+					colors[color] = colorIndex;
+				}
+
+				var vertexIndices = new Dictionary<int, int>();
+
+				var i = 0;
+				foreach (var loopVertex in bodyFace.Loops.First().Vertices) {
+					var eval = bodyFace.ProjectPoint(loopVertex.Position);
+					var vertex = new PositionNormalTextured(eval.Point, eval.Normal, eval.Param);
+					int index;
+					if (!vertices.TryGetValue(vertex, out index)) {
+						vertexList.Add(vertex.Position);
+						normalList.Add(vertex.Normal);
+						index = vertexList.Count - 1;
+						vertices[vertex] = index;
+					}
+
+					vertexIndices[i] = index;
+					i++;
+
+					if (i < 2)
+						continue;
+
+					faces.Add(new FaceStruct {
+						Vertex1 = vertexIndices[0],
+						Vertex2 = vertexIndices[i-2],
+						Vertex3 = vertexIndices[i-1],
+						Color = colorIndex
+					});
+				}
+
+			}
+
+			var faceTessellation = new BodyTessellation {
+				VertexPositions = vertexList,
+				VertexNormals = normalList,
+				FaceColors = colorList,
+				Faces = faces
+			};
+
+			List<BodyTessellation> edges = new List<BodyTessellation>();
+			foreach (var edge in body.Edges) {
+				edges.Add(new BodyTessellation {
+					VertexPositions = new List<Point>(edge.GetPolyline())
+				});
+			}
+
+			return new PartTessellation {
+				Lines = edges,
+				Meshes = { faceTessellation }
+			};
+		}
+
+
+		static PartTessellation GetBodyTessellationFacetted(Body body, Func<Face, Color> faceColor, double surfaceDeviation, double angleDeviation) {
 			var tessellationOptions = new TessellationOptions(surfaceDeviation, angleDeviation);
 			var tessellation = body.GetTessellation(null, tessellationOptions);
 
@@ -325,12 +403,13 @@ namespace SpaceClaim.AddIn.ThreeJsExport {
 			};
 		}
 
-
-		static PartTessellation GetCurvesTessellation(IList<ITrimmedCurve> curves) {
+		static PartTessellation GetCurvesTessellation(IList<ITrimmedCurve> curves, IList<Color> colors, bool isCurve = false) {
 			List<BodyTessellation> edges = new List<BodyTessellation>();
-			foreach (var curve in curves) {
+			for (int i = 0; i < curves.Count; i++) {
 				edges.Add(new BodyTessellation {
-					VertexPositions = new List<Point>(curve.GetPolyline())
+					VertexPositions = new List<Point>(curves[i].GetPolyline()),
+					FaceColors = new List<Color>() { colors[i] },
+					IsCurve = isCurve
 				});
 			}
 
